@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "BugBounty Tracker (Hunter Note)",
+  "version": "0.1.0",
+  "description": "为漏洞赏金测试提供历史追踪与笔记管理的Chrome插件。",
+  "action": {
+    "default_title": "BugBounty Tracker",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "save-selection": {
+      "suggested_key": { "default": "Ctrl+Shift+Y" },
+      "description": "保存选中文本为笔记"
+    },
+    "mark-tested": {
+      "suggested_key": { "default": "Ctrl+B" },
+      "description": "标记当前域为已测试"
+    }
+  }
+}

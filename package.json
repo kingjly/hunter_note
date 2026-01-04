@@ -1,0 +1,17 @@
+{
+  "name": "hunter_note",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Chrome extension for bug bounty tracking notes and history",
+  "license": "UNLICENSED",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier -w .",
+    "quality": "powershell -ExecutionPolicy Bypass -File ./scripts/quality-check.ps1"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.0"
+  }
+}

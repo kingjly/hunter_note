@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>笔记管理器 - Hunter Note</title>
+  <link rel="stylesheet" href="manager.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>Hunter Note</h2>
+        <div class="search-box">
+          <input type="text" id="searchInput" placeholder="搜索域名或内容...">
+        </div>
+      </div>
+      <div id="noteList" class="note-list">
+        <!-- 笔记列表项 -->
+      </div>
+    </aside>
+    <main class="main-content">
+      <div id="emptyState" class="empty-state">
+        <p>请从左侧选择一条笔记，或在页面浏览时新建笔记。</p>
+      </div>
+      <div id="editorContainer" class="editor-container" style="display: none;">
+        <header class="editor-header">
+          <div class="meta-info">
+            <h1 id="domainTitle">Domain</h1>
+            <span id="timeMeta" class="time-meta"></span>
+          </div>
+          <div class="actions">
+            <span id="saveStatus" class="save-status"></span>
+            <button id="saveBtn" class="btn primary">保存</button>
+            <button id="deleteBtn" class="btn danger">删除</button>
+          </div>
+        </header>
+        <div class="editor-body">
+          <div class="editor-pane">
+            <div class="pane-label">编辑 (Markdown)</div>
+            <div id="noteEditor" class="editor-content" contenteditable="true" data-placeholder="在此输入内容..."></div>
+          </div>
+          <div class="preview-pane">
+            <div class="pane-label">预览</div>
+            <div id="notePreview" class="preview-content markdown-body"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="manager.js"></script>
+</body>
+</html>

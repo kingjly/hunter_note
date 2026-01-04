@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+out/
+target/
+vendor/
+lib/
+.git/
+.trae/
+docs/
+__pycache__/
+.cache/
+*.min.js
+*.d.ts
