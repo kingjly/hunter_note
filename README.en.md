@@ -109,7 +109,7 @@ npm run format
 
 ## 📄 License
 
-No LICENSE file is included yet (`package.json` is `UNLICENSED`). If you plan to open-source it, consider adding a proper license.
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).
 
 ---
 

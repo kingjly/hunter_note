@@ -110,7 +110,7 @@ npm run format
 
 ## 📄 许可证
 
-当前仓库未提供 LICENSE（`package.json` 标记为 `UNLICENSED`）。如需开源发布，建议补充合适的许可证文件。
+本项目采用 MIT License，详见 [LICENSE](./LICENSE)。
 
 ---
 
