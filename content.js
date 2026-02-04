@@ -4,6 +4,7 @@
   const ACCENT = '#2563eb';
   const TEXT = '#1f2937';
   const BG = '#f9fafb';
+  const FLOAT_STATE_KEY = 'float-state';
   let domainCache = '';
   try {
     domainCache = window.location.host || '';
@@ -31,10 +32,11 @@
       width: 48px; height: 48px; border-radius: 24px;
       background: ${ACCENT}; color: white; display: flex; align-items: center; justify-content: center;
       box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-      cursor: pointer; user-select: none; font-weight: 600;
+      cursor: grab; user-select: none; font-weight: 600; touch-action: none;
       outline: none; border: none;
       transition: transform .15s ease, box-shadow .15s ease;
     }
+    .float.dragging { cursor: grabbing; }
     .float.tested { background: #16a34a; } /* 绿色：已测试 */
     .float.untested { background: #3b82f6; } /* 蓝色：未测试 */
     .float:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(0,0,0,0.22); }
@@ -172,7 +174,7 @@
 
   const float = document.createElement('button');
   float.className = 'float';
-  float.title = 'BugBounty Tracker';
+  float.title = 'BugBounty Tracker（拖动移动，右键隐藏，Ctrl+Shift+H 显示/隐藏）';
   float.textContent = '未测';
   shadow.appendChild(float);
 
@@ -208,6 +210,83 @@
     <div class="list" id="noteList"></div>
   `;
   shadow.appendChild(panel);
+
+  let floatHidden = false;
+  let ignoreClick = false;
+  let dragActive = false;
+  let dragMoved = false;
+  let dragStart = null;
+
+  function clamp(v, min, max) {
+    return Math.min(max, Math.max(min, v));
+  }
+
+  function setFloatHidden(hidden) {
+    floatHidden = hidden;
+    host.style.display = hidden ? 'none' : 'block';
+    if (hidden) setPanelVisible(false);
+  }
+
+  function positionPanel() {
+    if (!panel.classList.contains('visible')) return;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    const margin = 8;
+    const floatRect = float.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    let left = floatRect.right - panelRect.width;
+    let top = floatRect.top - panelRect.height - 12;
+    if (left < margin) left = margin;
+    if (left + panelRect.width > window.innerWidth - margin) {
+      left = window.innerWidth - margin - panelRect.width;
+    }
+    if (top < margin) top = floatRect.bottom + 12;
+    if (top + panelRect.height > window.innerHeight - margin) {
+      top = window.innerHeight - margin - panelRect.height;
+    }
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+  }
+
+  function setFloatPosition(left, top) {
+    host.style.left = `${left}px`;
+    host.style.top = `${top}px`;
+    host.style.right = 'auto';
+    host.style.bottom = 'auto';
+  }
+
+  async function loadFloatState() {
+    try {
+      const res = await chrome.storage.local.get(FLOAT_STATE_KEY);
+      const state = res[FLOAT_STATE_KEY] || {};
+      if (typeof state.hidden === 'boolean') setFloatHidden(state.hidden);
+      if (typeof state.x === 'number' && typeof state.y === 'number') {
+        const margin = 8;
+        const w = float.offsetWidth || 48;
+        const h = float.offsetHeight || 48;
+        const left = clamp(state.x, margin, window.innerWidth - w - margin);
+        const top = clamp(state.y, margin, window.innerHeight - h - margin);
+        setFloatPosition(left, top);
+      }
+    } catch (e) {
+      void 0;
+    }
+  }
+
+  async function saveFloatState() {
+    try {
+      const rect = host.getBoundingClientRect();
+      await chrome.storage.local.set({
+        [FLOAT_STATE_KEY]: {
+          hidden: floatHidden,
+          x: rect.left,
+          y: rect.top,
+        },
+      });
+    } catch (e) {
+      void 0;
+    }
+  }
 
   // Markdown Context Menu for Editor
   const mdMenu = document.createElement('div');
@@ -327,6 +406,7 @@
 
   function setPanelVisible(v) {
     panel.classList.toggle('visible', v);
+    if (v) positionPanel();
   }
 
   function fmt(ts) {
@@ -535,8 +615,72 @@
   }
 
   float.addEventListener('click', () => {
+    if (ignoreClick) return;
     setPanelVisible(!panel.classList.contains('visible'));
     if (panel.classList.contains('visible')) refresh();
+  });
+
+  float.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    setFloatHidden(true);
+    saveFloatState();
+  });
+
+  float.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || floatHidden) return;
+    dragActive = true;
+    dragMoved = false;
+    float.classList.add('dragging');
+    const rect = host.getBoundingClientRect();
+    dragStart = { x: e.clientX, y: e.clientY, left: rect.left, top: rect.top };
+    float.setPointerCapture(e.pointerId);
+  });
+
+  window.addEventListener('pointermove', (e) => {
+    if (!dragActive || !dragStart) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (!dragMoved && Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;
+    const margin = 8;
+    const w = float.offsetWidth || 48;
+    const h = float.offsetHeight || 48;
+    const left = clamp(dragStart.left + dx, margin, window.innerWidth - w - margin);
+    const top = clamp(dragStart.top + dy, margin, window.innerHeight - h - margin);
+    setFloatPosition(left, top);
+    if (panel.classList.contains('visible')) positionPanel();
+  });
+
+  window.addEventListener('pointerup', (e) => {
+    if (!dragActive) return;
+    dragActive = false;
+    float.classList.remove('dragging');
+    if (dragMoved) {
+      ignoreClick = true;
+      saveFloatState();
+      setTimeout(() => {
+        ignoreClick = false;
+      }, 0);
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    const key = (e.key || '').toLowerCase();
+    if (e.ctrlKey && e.shiftKey && key === 'h') {
+      setFloatHidden(!floatHidden);
+      saveFloatState();
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    if (floatHidden) return;
+    const rect = host.getBoundingClientRect();
+    const margin = 8;
+    const w = float.offsetWidth || 48;
+    const h = float.offsetHeight || 48;
+    const left = clamp(rect.left, margin, window.innerWidth - w - margin);
+    const top = clamp(rect.top, margin, window.innerHeight - h - margin);
+    setFloatPosition(left, top);
+    if (panel.classList.contains('visible')) positionPanel();
   });
 
   async function checkStatus() {
@@ -863,12 +1007,11 @@
   // 手动模式不依赖后台推送消息，浮球始终可见
   // 初始化时根据当前域状态更新悬浮图标颜色
   (async () => {
-    if (domainCache) {
-      try {
-        await checkStatus();
-      } catch (e) {
-        void 0;
-      }
+    try {
+      await loadFloatState();
+      if (domainCache) await checkStatus();
+    } catch (e) {
+      void 0;
     }
   })();
 
