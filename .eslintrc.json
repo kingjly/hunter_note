@@ -1,0 +1,33 @@
+{
+  "root": true,
+  "env": {
+    "browser": true,
+    "es2021": true
+  },
+  "globals": {
+    "chrome": "readonly"
+  },
+  "parserOptions": {
+    "ecmaVersion": 2021,
+    "sourceType": "script"
+  },
+  "extends": ["eslint:recommended"],
+  "rules": {
+    "complexity": ["error", { "max": 10 }],
+    "max-depth": ["error", 3],
+    "max-params": ["error", 5],
+    "max-lines-per-function": ["warn", { "max": 50, "skipComments": true, "skipBlankLines": true }],
+    "max-lines": ["warn", { "max": 500, "skipComments": true, "skipBlankLines": true }],
+    "no-unused-vars": ["warn", { "vars": "all", "args": "after-used", "ignoreRestSiblings": true }],
+    "no-undef": "error",
+    "no-console": "off"
+  },
+  "overrides": [
+    {
+      "files": ["content.js", "manager.js"],
+      "rules": {
+        "max-lines": "off"
+      }
+    }
+  ]
+}

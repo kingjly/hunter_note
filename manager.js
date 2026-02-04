@@ -64,38 +64,47 @@ function mdToEditorHtml(src) {
   return text;
 }
 
+function isPreCode(node) {
+  const parent = node.parentElement;
+  return parent && parent.tagName && parent.tagName.toLowerCase() === 'pre';
+}
+function listToMd(node, ordered) {
+  const items = Array.from(node.children).map((li, idx) => {
+    const prefix = ordered ? `${idx + 1}. ` : '- ';
+    return `${prefix}${htmlToMdFromNode(li)}`;
+  });
+  return items.join('\n') + '\n';
+}
+const mdTagHandlers = {
+  br: () => '\n',
+  strong: (_n, inner) => `**${inner}**`,
+  b: (_n, inner) => `**${inner}**`,
+  em: (_n, inner) => `*${inner}*`,
+  i: (_n, inner) => `*${inner}*`,
+  code: (node, inner) => (isPreCode(node) ? inner : `\`${inner}\``),
+  a: (node, inner) => `[${inner}](${node.getAttribute('href') || ''})`,
+  img: (node) => `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`,
+  h1: (_n, inner) => `# ${inner}\n`,
+  h2: (_n, inner) => `## ${inner}\n`,
+  h3: (_n, inner) => `### ${inner}\n`,
+  h4: (_n, inner) => `#### ${inner}\n`,
+  h5: (_n, inner) => `##### ${inner}\n`,
+  h6: (_n, inner) => `###### ${inner}\n`,
+  pre: (_n, inner) => `\n\`\`\`\n${inner.trim()}\n\`\`\`\n`,
+  p: (_n, inner) => `${inner}\n`,
+  div: (_n, inner) => `${inner}\n`,
+  ul: (node) => listToMd(node, false),
+  ol: (node) => listToMd(node, true),
+  li: (_n, inner) => inner,
+};
 function htmlToMdFromNode(node) {
   if (!node) return '';
-  const t = node.nodeType;
-  if (t === Node.TEXT_NODE) return node.textContent || '';
-  if (t !== Node.ELEMENT_NODE) return '';
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
   const tag = node.tagName.toLowerCase();
   const inner = Array.from(node.childNodes).map(htmlToMdFromNode).join('');
-  if (tag === 'br') return '\n';
-  if (tag === 'strong' || tag === 'b') return `**${inner}**`;
-  if (tag === 'em' || tag === 'i') return `*${inner}*`;
-  if (tag === 'code' && node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') return inner;
-  if (tag === 'code') return `\`${inner}\``;
-  if (tag === 'a') {
-    const href = node.getAttribute('href') || '';
-    return `[${inner}](${href})`;
-  }
-  if (tag === 'img') {
-    const src = node.getAttribute('src') || '';
-    const alt = node.getAttribute('alt') || '';
-    return `![${alt}](${src})`;
-  }
-  if (tag === 'h1') return `# ${inner}\n`;
-  if (tag === 'h2') return `## ${inner}\n`;
-  if (tag === 'h3') return `### ${inner}\n`;
-  if (tag === 'h4') return `#### ${inner}\n`;
-  if (tag === 'h5') return `##### ${inner}\n`;
-  if (tag === 'h6') return `###### ${inner}\n`;
-  if (tag === 'pre') return `\n\`\`\`\n${inner.trim()}\n\`\`\`\n`;
-  if (tag === 'p' || tag === 'div') return `${inner}\n`;
-  if (tag === 'ul') return Array.from(node.children).map((li) => `- ${htmlToMdFromNode(li)}`).join('\n') + '\n';
-  if (tag === 'ol') return Array.from(node.children).map((li, i) => `${i + 1}. ${htmlToMdFromNode(li)}`).join('\n') + '\n';
-  if (tag === 'li') return inner;
+  const handler = mdTagHandlers[tag];
+  if (handler) return handler(node, inner);
   return inner;
 }
 
@@ -128,91 +137,110 @@ async function fetchAllNotes() {
   return notes;
 }
 
+function noteMatchesQuery(note, query) {
+  if (!query) return true;
+  const domainMatch = note.domain.toLowerCase().includes(query);
+  const contentMatch = (note.content || '').toLowerCase().includes(query);
+  return domainMatch || contentMatch;
+}
+function groupNotesByDomain(notes, query) {
+  const groups = {};
+  notes.forEach((n) => {
+    if (!noteMatchesQuery(n, query)) return;
+    if (!groups[n.domain]) groups[n.domain] = [];
+    groups[n.domain].push(n);
+  });
+  return groups;
+}
+function createGroupHeader(domain, count) {
+  const groupHeader = document.createElement('div');
+  groupHeader.className = 'group-header';
+  groupHeader.style.padding = '8px 12px';
+  groupHeader.style.fontWeight = 'bold';
+  groupHeader.style.background = '#e5e7eb';
+  groupHeader.style.color = '#374151';
+  groupHeader.style.fontSize = '13px';
+  groupHeader.style.marginTop = '8px';
+  groupHeader.style.borderRadius = '6px';
+  groupHeader.style.cursor = 'pointer';
+  groupHeader.style.display = 'flex';
+  groupHeader.style.justifyContent = 'space-between';
+  groupHeader.style.alignItems = 'center';
+
+  const headerTitle = document.createElement('span');
+  headerTitle.textContent = `${domain} (${count})`;
+
+  const toggleIcon = document.createElement('span');
+  toggleIcon.textContent = '▼';
+  toggleIcon.style.fontSize = '10px';
+  toggleIcon.style.transition = 'transform 0.2s';
+
+  groupHeader.appendChild(headerTitle);
+  groupHeader.appendChild(toggleIcon);
+
+  return { groupHeader, toggleIcon };
+}
+function createGroupContainer() {
+  const groupContainer = document.createElement('div');
+  groupContainer.className = 'group-container';
+  groupContainer.style.display = 'block';
+  return groupContainer;
+}
+function noteSummaryText(note) {
+  const raw = note.content || '';
+  return raw.replace(/!\[.*?\]\(.*?\)/g, '[图片]').replace(/[#*`>]/g, '').trim();
+}
+function createNoteItem(note) {
+  const item = document.createElement('div');
+  item.className = `note-item ${currentNote && currentNote.id === note.id ? 'active' : ''}`;
+  item.dataset.id = note.id;
+
+  const summary = document.createElement('div');
+  summary.className = 'note-item-summary';
+  const textOnly = noteSummaryText(note);
+  summary.textContent = textOnly || '（无内容）';
+
+  const meta = document.createElement('div');
+  meta.className = 'note-item-meta';
+  meta.textContent = fmt(note.updatedAt);
+
+  item.appendChild(summary);
+  item.appendChild(meta);
+
+  item.addEventListener('click', (e) => {
+    e.stopPropagation();
+    selectNote(note);
+  });
+
+  return item;
+}
+function renderGroup(list, domain, groupNotes) {
+  const { groupHeader, toggleIcon } = createGroupHeader(domain, groupNotes.length);
+  const groupContainer = createGroupContainer();
+
+  groupHeader.addEventListener('click', () => {
+    const isHidden = groupContainer.style.display === 'none';
+    groupContainer.style.display = isHidden ? 'block' : 'none';
+    toggleIcon.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
+  });
+
+  groupNotes.forEach((n) => {
+    groupContainer.appendChild(createNoteItem(n));
+  });
+
+  list.appendChild(groupHeader);
+  list.appendChild(groupContainer);
+}
+
 function renderList(notes) {
   const list = el('noteList');
   list.innerHTML = '';
   const query = el('searchInput').value.trim().toLowerCase();
-
-  // Group notes by domain
-  const groups = {};
-  notes.forEach(n => {
-    if (query && !n.domain.toLowerCase().includes(query) && !(n.content || '').toLowerCase().includes(query)) return;
-    if (!groups[n.domain]) groups[n.domain] = [];
-    groups[n.domain].push(n);
-  });
-
-  // Render groups
-  Object.keys(groups).sort().forEach(domain => {
+  const groups = groupNotesByDomain(notes, query);
+  Object.keys(groups).sort().forEach((domain) => {
     const groupNotes = groups[domain];
-    if (groupNotes.length === 0) return;
-
-    const groupHeader = document.createElement('div');
-    groupHeader.className = 'group-header';
-    groupHeader.style.padding = '8px 12px';
-    groupHeader.style.fontWeight = 'bold';
-    groupHeader.style.background = '#e5e7eb';
-    groupHeader.style.color = '#374151';
-    groupHeader.style.fontSize = '13px';
-    groupHeader.style.marginTop = '8px';
-    groupHeader.style.borderRadius = '6px';
-    groupHeader.style.cursor = 'pointer';
-    groupHeader.style.display = 'flex';
-    groupHeader.style.justifyContent = 'space-between';
-    groupHeader.style.alignItems = 'center';
-
-    const headerTitle = document.createElement('span');
-    headerTitle.textContent = `${domain} (${groupNotes.length})`;
-    
-    const toggleIcon = document.createElement('span');
-    toggleIcon.textContent = '▼';
-    toggleIcon.style.fontSize = '10px';
-    toggleIcon.style.transition = 'transform 0.2s';
-
-    groupHeader.appendChild(headerTitle);
-    groupHeader.appendChild(toggleIcon);
-    list.appendChild(groupHeader);
-
-    const groupContainer = document.createElement('div');
-    groupContainer.className = 'group-container';
-    groupContainer.style.display = 'block'; // Default expanded
-
-    groupHeader.addEventListener('click', () => {
-        const isHidden = groupContainer.style.display === 'none';
-        groupContainer.style.display = isHidden ? 'block' : 'none';
-        toggleIcon.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
-    });
-
-    groupNotes.forEach((n) => {
-      const item = document.createElement('div');
-      item.className = `note-item ${currentNote && currentNote.id === n.id ? 'active' : ''}`;
-      item.dataset.id = n.id;
-      
-      // Removed domain title from item since it's grouped
-      // const title = document.createElement('div');
-      // title.className = 'note-item-title';
-      // title.textContent = n.domain;
-
-      const summary = document.createElement('div');
-      summary.className = 'note-item-summary';
-      const raw = n.content || '';
-      const textOnly = raw.replace(/!\[.*?\]\(.*?\)/g, '[图片]').replace(/[#*`>]/g, '').trim();
-      summary.textContent = textOnly || '（无内容）';
-
-      const meta = document.createElement('div');
-      meta.className = 'note-item-meta';
-      meta.textContent = fmt(n.updatedAt);
-
-      // item.appendChild(title);
-      item.appendChild(summary);
-      item.appendChild(meta);
-
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        selectNote(n);
-      });
-      groupContainer.appendChild(item);
-    });
-    list.appendChild(groupContainer);
+    if (!groupNotes.length) return;
+    renderGroup(list, domain, groupNotes);
   });
 }
 
@@ -314,92 +342,55 @@ el('searchInput').addEventListener('input', () => {
 // Editor Events
 const editorEl = el('noteEditor');
 editorEl.addEventListener('input', updatePreview);
-editorEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-    // Delay logic to ensure we are processing the correct state if needed, 
-    // but here we want to intercept BEFORE the break.
-    // The problem with previous code: textBefore usually contains whole previous text
-    // but if contenteditable uses <div> or <br>, we need to handle it.
-    
-    const sel = window.getSelection();
-    if (!sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
-    
-    // Get text of the current line (block)
-    // Find the closest block element or if it's text node, find its parent
-    let block = range.startContainer;
-    if (block.nodeType === 3) block = block.parentNode;
-    
-    // If block is the editor itself, we might be in a text node directly
-    // Check previous siblings for newlines? 
-    // Actually, simpler approach: get textContent of the current block if it is a DIV/P/LI
-    // If it is the editor itself, we fallback to scanning back.
-    
-    let currentLineText = '';
-    if (block !== editorEl && (block.tagName === 'DIV' || block.tagName === 'P' || block.tagName === 'LI')) {
-       currentLineText = block.textContent;
-    } else {
-       // We are in a text node inside editor, scan back to \n
-       const preRange = range.cloneRange();
-       preRange.selectNodeContents(editorEl);
-       preRange.setEnd(range.endContainer, range.endOffset);
-       const fullText = preRange.toString();
-       const lastNl = fullText.lastIndexOf('\n');
-       currentLineText = lastNl === -1 ? fullText : fullText.substring(lastNl + 1);
-    }
-
-    // If we are at the start of a line (offset 0) or text is selected? 
-    // We assume cursor is at end of text usually for "Enter" to mean "continue list"
-    // But user might press enter in middle. 
-    // Let's stick to "prefix match" logic.
-
-    const ulMatch = currentLineText.match(/^(\s*)([-*+])(\s+)(.*)$/);
-    const olMatch = currentLineText.match(/^(\s*)(\d+)(\.\s+)(.*)$/);
-    const taskMatch = currentLineText.match(/^(\s*)(-\s*\[[ x]\])(\s+)(.*)$/);
-
-    let toInsert = null;
-    let isEmptyLine = false; // If current line is just the bullet
-
-    if (taskMatch) {
-      if (!taskMatch[4].trim()) isEmptyLine = true;
-      else toInsert = '\n' + taskMatch[1] + '- [ ] ';
-    } else if (olMatch) {
-      if (!olMatch[4].trim()) isEmptyLine = true;
-      else {
-        const num = parseInt(olMatch[2], 10);
-        toInsert = '\n' + olMatch[1] + (num + 1) + olMatch[3];
-      }
-    } else if (ulMatch) {
-      if (!ulMatch[4].trim()) isEmptyLine = true;
-      else toInsert = '\n' + ulMatch[1] + ulMatch[2] + ulMatch[3];
-    }
-
-    if (isEmptyLine) {
-        // User pressed Enter on an empty bullet line -> Break out of list
-        // We want to remove the bullet from current line and just have a newline
-        // But default Enter might keep the bullet or just add new line?
-        // Easiest: Prevent default, manually clear current line text (or just the bullet part)
-        // Since managing range deletion is tricky, let's try:
-        // If we preventDefault, we must handle the newline logic manually.
-        // Wait, if it is empty line, we just want to stop list.
-        // So we should probably just clear the current line's bullet content.
-        // But simply returning here lets default Enter happen, which creates a NEW line with potential garbage?
-        // Actually, if we return, standard behavior happens (new line).
-        // The user wants "Exit list". 
-        // Let's leave standard behavior for empty line for now to avoid breaking things, 
-        // or implement "Delete current line's bullet" logic.
-        // Given "user input: 自动接续没实现", priority is making connection work.
-        // The issue is likely `currentLinePrefix` calculation was wrong due to DOM structure.
-        return;
-    }
-
-    if (toInsert) {
-      e.preventDefault();
-      document.execCommand('insertText', false, toInsert);
-      // Scroll to view?
-      editorEl.blur(); editorEl.focus(); // Hack to ensure scroll sometimes
-    }
+function isListEnterEvent(e) {
+  return e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+function getEditorSelection(editorEl) {
+  const root = editorEl.getRootNode ? editorEl.getRootNode() : editorEl.ownerDocument;
+  const sel = root.getSelection ? root.getSelection() : editorEl.ownerDocument.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  return sel;
+}
+function getCurrentLineText(editorEl) {
+  const sel = getEditorSelection(editorEl);
+  if (!sel) return '';
+  const range = sel.getRangeAt(0);
+  const preCaretRange = range.cloneRange();
+  preCaretRange.selectNodeContents(editorEl);
+  preCaretRange.setEnd(range.endContainer, range.endOffset);
+  const textBefore = preCaretRange.toString();
+  const lastNewLine = textBefore.lastIndexOf('\n');
+  return lastNewLine === -1 ? textBefore : textBefore.substring(lastNewLine + 1);
+}
+function getListContinuation(lineText) {
+  const taskMatch = lineText.match(/^(\s*)(-\s*\[[ x]\])(\s+)(.*)$/);
+  if (taskMatch) {
+    if (!taskMatch[4].trim()) return { isEmpty: true, toInsert: '' };
+    return { isEmpty: false, toInsert: `\n${taskMatch[1]}- [ ] ` };
   }
+  const olMatch = lineText.match(/^(\s*)(\d+)(\.\s+)(.*)$/);
+  if (olMatch) {
+    if (!olMatch[4].trim()) return { isEmpty: true, toInsert: '' };
+    const num = parseInt(olMatch[2], 10);
+    return { isEmpty: false, toInsert: `\n${olMatch[1]}${num + 1}${olMatch[3]}` };
+  }
+  const ulMatch = lineText.match(/^(\s*)([-*+])(\s+)(.*)$/);
+  if (ulMatch) {
+    if (!ulMatch[4].trim()) return { isEmpty: true, toInsert: '' };
+    return { isEmpty: false, toInsert: `\n${ulMatch[1]}${ulMatch[2]}${ulMatch[3]}` };
+  }
+  return null;
+}
+editorEl.addEventListener('keydown', (e) => {
+  if (!isListEnterEvent(e)) return;
+  const lineText = getCurrentLineText(editorEl);
+  if (!lineText) return;
+  const next = getListContinuation(lineText);
+  if (!next || next.isEmpty || !next.toInsert) return;
+  e.preventDefault();
+  document.execCommand('insertText', false, next.toInsert);
+  editorEl.blur();
+  editorEl.focus();
 });
 
 // Paste Image Logic (Reuse from content.js)

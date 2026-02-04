@@ -42,6 +42,5 @@ hunter_note_release.zip
 docs/
 
 # quality
-.eslintrc.json
 .eslintignore
 scripts/

@@ -17,6 +17,7 @@ function fmt(ts) {
 }
 
 const isExtension = typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage;
+const FLOAT_STATE_KEY = 'float-state';
 
 function mockMessage(msg) {
   const { type } = msg || {};
@@ -47,36 +48,6 @@ function mockMessage(msg) {
 function sendMessage(msg) {
   if (!isExtension) return Promise.resolve(mockMessage(msg));
   return new Promise((resolve) => chrome.runtime.sendMessage(msg, resolve));
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function mdToHtml(src) {
-  let text = escapeHtml(src || '');
-  text = text.replace(/```([\s\S]*?)```/g, (m, code) => `<pre><code>${code}</code></pre>`);
-  text = text.replace(/^#{6}\s+(.*)$/gm, '<h6>$1</h6>');
-  text = text.replace(/^#{5}\s+(.*)$/gm, '<h5>$1</h5>');
-  text = text.replace(/^#{4}\s+(.*)$/gm, '<h4>$1</h4>');
-  text = text.replace(/^#{3}\s+(.*)$/gm, '<h3>$1</h3>');
-  text = text.replace(/^#{2}\s+(.*)$/gm, '<h2>$1</h2>');
-  text = text.replace(/^#\s+(.*)$/gm, '<h1>$1</h1>');
-  text = text.replace(/^\s*[-*+]\s+(.*)$/gm, '<ul><li>$1</li></ul>');
-  text = text.replace(/<\/ul>\n<ul>/g, '');
-  text = text.replace(/`([^`]+?)`/g, '<code>$1</code>');
-  text = text.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/\*(?!\*)([^*]+?)\*/g, '<em>$1</em>');
-  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2" />');
-  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  text = text.replace(/\n\n+/g, '<p></p>');
-  text = text.replace(/\n/g, '<br>');
-  return text;
 }
 
 // Tabs
@@ -212,146 +183,155 @@ el('clearHistory').addEventListener('click', async () => {
 });
 
 // Notes Tab (简化：展示所有域名的最近笔记)
+function summarizeNoteContent(content) {
+  const rawContent = content || '';
+  const textOnly = rawContent.replace(/!\[.*?\]\(.*?\)/g, '[图片]').replace(/[#*`>]/g, '').trim();
+  return textOnly;
+}
+function normalizeNoteDomain(note, domain) {
+  if (note.domain) return note;
+  return { ...note, domain };
+}
+async function fetchNotesForDomain(domain, query) {
+  const noteResp = await sendMessage({ type: 'GET_NOTES', payload: { domain } });
+  const notes = noteResp?.data || [];
+  const domainLower = domain.toLowerCase();
+  return notes
+    .map((n) => normalizeNoteDomain(n, domain))
+    .filter((n) => {
+      if (!query) return true;
+      const contentLower = (n.content || '').toLowerCase();
+      return domainLower.includes(query) || contentLower.includes(query);
+    });
+}
+async function collectAllNotes(tree, query) {
+  const domains = [];
+  tree.forEach((group) => {
+    group.subdomains.forEach((rec) => {
+      domains.push(rec.domain);
+    });
+  });
+  const results = await Promise.all(domains.map((domain) => fetchNotesForDomain(domain, query)));
+  return results.flat();
+}
+function groupNotesByDomain(notes) {
+  return notes.reduce((acc, n) => {
+    if (!acc[n.domain]) acc[n.domain] = [];
+    acc[n.domain].push(n);
+    return acc;
+  }, {});
+}
+function createGroupHeader(domain, count) {
+  const groupHeader = document.createElement('div');
+  groupHeader.className = 'group-header';
+  groupHeader.style.padding = '8px';
+  groupHeader.style.fontWeight = 'bold';
+  groupHeader.style.background = '#f3f4f6';
+  groupHeader.style.color = '#374151';
+  groupHeader.style.fontSize = '13px';
+  groupHeader.style.marginTop = '8px';
+  groupHeader.style.borderRadius = '6px';
+  groupHeader.style.border = '1px solid #e5e7eb';
+  groupHeader.style.cursor = 'pointer';
+  groupHeader.style.display = 'flex';
+  groupHeader.style.justifyContent = 'space-between';
+  groupHeader.style.alignItems = 'center';
+
+  const headerTitle = document.createElement('span');
+  headerTitle.textContent = `${domain} (${count})`;
+
+  const toggleIcon = document.createElement('span');
+  toggleIcon.textContent = '▼';
+  toggleIcon.style.fontSize = '10px';
+  toggleIcon.style.transition = 'transform 0.2s';
+
+  groupHeader.appendChild(headerTitle);
+  groupHeader.appendChild(toggleIcon);
+
+  return { groupHeader, toggleIcon };
+}
+function createNoteItem(note) {
+  const item = document.createElement('div');
+  item.className = 'note-item';
+
+  const body = document.createElement('div');
+  body.className = 'note-body';
+
+  const content = document.createElement('div');
+  content.className = 'note-content';
+  const textOnly = summarizeNoteContent(note.content);
+  content.textContent = textOnly.slice(0, 100) + (textOnly.length > 100 ? '...' : '');
+  content.title = '点击查看详情';
+  content.style.cursor = 'pointer';
+  content.addEventListener('click', () => {
+    chrome.tabs.create({ url: `manager.html?id=${note.id}` });
+  });
+
+  const meta = document.createElement('div');
+  meta.className = 'note-meta';
+  meta.textContent = `更新：${fmt(note.updatedAt)}`;
+
+  body.appendChild(content);
+  body.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'note-actions';
+
+  const del = document.createElement('button');
+  del.className = 'btn danger';
+  del.textContent = '删除';
+  del.addEventListener('click', async () => {
+    await sendMessage({ type: 'DELETE_NOTE', payload: { noteId: note.id } });
+    loadAllNotes();
+  });
+
+  const view = document.createElement('button');
+  view.className = 'btn';
+  view.textContent = '详情';
+  view.style.marginRight = '8px';
+  view.addEventListener('click', () => {
+    chrome.tabs.create({ url: `manager.html?id=${note.id}` });
+  });
+
+  actions.appendChild(view);
+  actions.appendChild(del);
+  item.appendChild(body);
+  item.appendChild(actions);
+
+  return item;
+}
+function renderNotesList(list, groups) {
+  const sortedDomains = Object.keys(groups).sort();
+  if (sortedDomains.length === 0) {
+    list.innerHTML = '<div style="padding:16px; text-align:center; color:#9ca3af;">暂无笔记</div>';
+    return;
+  }
+  sortedDomains.forEach((domain) => {
+    const groupNotes = groups[domain];
+    const { groupHeader, toggleIcon } = createGroupHeader(domain, groupNotes.length);
+    const groupContainer = document.createElement('div');
+    groupContainer.style.display = 'block';
+    groupHeader.addEventListener('click', () => {
+      const isHidden = groupContainer.style.display === 'none';
+      groupContainer.style.display = isHidden ? 'block' : 'none';
+      toggleIcon.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
+    });
+    groupNotes.forEach((n) => {
+      groupContainer.appendChild(createNoteItem(n));
+    });
+    list.appendChild(groupHeader);
+    list.appendChild(groupContainer);
+  });
+}
 async function loadAllNotes() {
   const resp = await sendMessage({ type: 'GET_HISTORY_TREE' });
   const tree = resp?.data || [];
   const list = el('notesList');
   list.innerHTML = '';
-  
-  // Collect all notes first to group them locally
-  let allNotes = [];
   const query = (el('notesSearch')?.value || '').trim().toLowerCase();
-  
-  for (const group of tree) {
-    for (const rec of group.subdomains) {
-      const noteResp = await sendMessage({ type: 'GET_NOTES', payload: { domain: rec.domain } });
-      const notes = noteResp?.data || [];
-      
-      for (const n of notes) {
-        const domainLower = rec.domain.toLowerCase();
-        const contentLower = (n.content || '').toLowerCase();
-        if (query && !domainLower.includes(query) && !contentLower.includes(query)) continue;
-        // Attach domain info if missing in note object (though usually it has it or we know it from loop)
-        // background's GET_NOTES returns notes which usually have domain field. 
-        // If not, we assign it.
-        if (!n.domain) n.domain = rec.domain;
-        allNotes.push(n);
-      }
-    }
-  }
-
-  // Group by domain
-  const groups = {};
-  allNotes.forEach(n => {
-    if (!groups[n.domain]) groups[n.domain] = [];
-    groups[n.domain].push(n);
-  });
-
-  // Render groups
-  const sortedDomains = Object.keys(groups).sort();
-  
-  if (sortedDomains.length === 0) {
-     list.innerHTML = '<div style="padding:16px; text-align:center; color:#9ca3af;">暂无笔记</div>';
-     return;
-  }
-
-  sortedDomains.forEach(domain => {
-    const groupNotes = groups[domain];
-    
-    // Group Header
-    const groupHeader = document.createElement('div');
-    groupHeader.className = 'group-header';
-    // groupHeader.textContent = `${domain} (${groupNotes.length})`;
-    groupHeader.style.padding = '8px';
-    groupHeader.style.fontWeight = 'bold';
-    groupHeader.style.background = '#f3f4f6';
-    groupHeader.style.color = '#374151';
-    groupHeader.style.fontSize = '13px';
-    groupHeader.style.marginTop = '8px';
-    groupHeader.style.borderRadius = '6px';
-    groupHeader.style.border = '1px solid #e5e7eb';
-    groupHeader.style.cursor = 'pointer';
-    groupHeader.style.display = 'flex';
-    groupHeader.style.justifyContent = 'space-between';
-    groupHeader.style.alignItems = 'center';
-
-    const headerTitle = document.createElement('span');
-    headerTitle.textContent = `${domain} (${groupNotes.length})`;
-    
-    const toggleIcon = document.createElement('span');
-    toggleIcon.textContent = '▼';
-    toggleIcon.style.fontSize = '10px';
-    toggleIcon.style.transition = 'transform 0.2s';
-
-    groupHeader.appendChild(headerTitle);
-    groupHeader.appendChild(toggleIcon);
-    list.appendChild(groupHeader);
-
-    const groupContainer = document.createElement('div');
-    groupContainer.style.display = 'block';
-
-    groupHeader.addEventListener('click', () => {
-        const isHidden = groupContainer.style.display === 'none';
-        groupContainer.style.display = isHidden ? 'block' : 'none';
-        toggleIcon.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
-    });
-
-    groupNotes.forEach(n => {
-        const item = document.createElement('div');
-        item.className = 'note-item';
-        const body = document.createElement('div');
-        body.className = 'note-body';
-        
-        // Removed title since grouped
-        // const title = document.createElement('div');
-        // title.className = 'note-title';
-        // title.textContent = n.domain;
-        
-        const content = document.createElement('div');
-        content.className = 'note-content';
-        // 仅显示摘要，不渲染 Markdown
-        const rawContent = n.content || '';
-        // 简单的摘要提取：去除图片标签，截取前100字符
-        const textOnly = rawContent.replace(/!\[.*?\]\(.*?\)/g, '[图片]').replace(/[#*`>]/g, '').trim();
-        content.textContent = textOnly.slice(0, 100) + (textOnly.length > 100 ? '...' : '');
-        content.title = '点击查看详情';
-        content.style.cursor = 'pointer';
-        content.addEventListener('click', () => {
-          chrome.tabs.create({ url: `manager.html?id=${n.id}` });
-        });
-
-        const meta = document.createElement('div');
-        meta.className = 'note-meta';
-        meta.textContent = `更新：${fmt(n.updatedAt)}`;
-        // body.appendChild(title);
-        body.appendChild(content);
-        body.appendChild(meta);
-        const actions = document.createElement('div');
-        actions.className = 'note-actions';
-        const del = document.createElement('button');
-        del.className = 'btn danger';
-        del.textContent = '删除';
-        del.addEventListener('click', async () => {
-          await sendMessage({ type: 'DELETE_NOTE', payload: { noteId: n.id } });
-          loadAllNotes();
-        });
-
-        const view = document.createElement('button');
-        view.className = 'btn';
-        view.textContent = '详情';
-        view.style.marginRight = '8px';
-        view.addEventListener('click', () => {
-           chrome.tabs.create({ url: `manager.html?id=${n.id}` });
-        });
-
-        actions.appendChild(view);
-        actions.appendChild(del);
-        item.appendChild(body);
-        item.appendChild(actions);
-        groupContainer.appendChild(item);
-    });
-    list.appendChild(groupContainer);
-  });
+  const allNotes = await collectAllNotes(tree, query);
+  const groups = groupNotesByDomain(allNotes);
+  renderNotesList(list, groups);
 }
 
 el('notesSearch').addEventListener('input', loadAllNotes);
@@ -387,6 +367,45 @@ async function loadStorageUsage() {
     el('storageUsage').textContent = `存储占用约 ${kb} KB`;
   } else {
     el('storageUsage').textContent = '预览环境（非扩展）';
+  }
+}
+
+async function loadFloatToggle() {
+  const toggle = el('floatToggle');
+  if (!toggle) return;
+  if (!isExtension) {
+    toggle.checked = true;
+    return;
+  }
+  const res = await chrome.storage.local.get(FLOAT_STATE_KEY);
+  const state = res[FLOAT_STATE_KEY] || {};
+  toggle.checked = !state?.hidden;
+}
+
+async function updateFloatHidden(hidden) {
+  if (!isExtension) return;
+  const res = await chrome.storage.local.get(FLOAT_STATE_KEY);
+  const state = res[FLOAT_STATE_KEY] || {};
+  await chrome.storage.local.set({
+    [FLOAT_STATE_KEY]: {
+      ...state,
+      hidden,
+    },
+  });
+}
+
+async function notifyActiveTabFloatHidden(hidden) {
+  if (!isExtension) return;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs && tabs[0] ? tabs[0] : null;
+    if (!tab?.id) return;
+    await chrome.tabs.sendMessage(tab.id, {
+      type: 'SET_FLOAT_HIDDEN',
+      payload: { hidden },
+    });
+  } catch (e) {
+    void 0;
   }
 }
 
@@ -454,6 +473,15 @@ el('clearAll').addEventListener('click', async () => {
   }
 });
 
+if (el('floatToggle')) {
+  el('floatToggle').addEventListener('change', async (e) => {
+    const checked = e?.target?.checked;
+    const hidden = !checked;
+    await updateFloatHidden(hidden);
+    await notifyActiveTabFloatHidden(hidden);
+  });
+}
+
 // Theme Logic
 async function initTheme() {
   if (!isExtension) return;
@@ -492,5 +520,6 @@ if (el('themeToggle')) {
   await loadHistoryTree();
   await loadAllNotes();
   await loadStorageUsage();
+  await loadFloatToggle();
   await updateCurrentDomainLabel();
 })();

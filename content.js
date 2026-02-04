@@ -3,7 +3,6 @@
 (function () {
   const ACCENT = '#2563eb';
   const TEXT = '#1f2937';
-  const BG = '#f9fafb';
   const FLOAT_STATE_KEY = 'float-state';
   let domainCache = '';
   try {
@@ -462,39 +461,47 @@
     return text;
   }
 
-  let previewOn = true;
+  function isPreCode(node) {
+    const parent = node.parentElement;
+    return parent && parent.tagName && parent.tagName.toLowerCase() === 'pre';
+  }
+  function listToMd(node, ordered) {
+    const items = Array.from(node.children).map((li, idx) => {
+      const prefix = ordered ? `${idx + 1}. ` : '- ';
+      return `${prefix}${htmlToMdFromNode(li)}`;
+    });
+    return items.join('\n') + '\n';
+  }
+  const mdTagHandlers = {
+    br: () => '\n',
+    strong: (_n, inner) => `**${inner}**`,
+    b: (_n, inner) => `**${inner}**`,
+    em: (_n, inner) => `*${inner}*`,
+    i: (_n, inner) => `*${inner}*`,
+    code: (node, inner) => (isPreCode(node) ? inner : `\`${inner}\``),
+    a: (node, inner) => `[${inner}](${node.getAttribute('href') || ''})`,
+    img: (node) => `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`,
+    h1: (_n, inner) => `# ${inner}\n`,
+    h2: (_n, inner) => `## ${inner}\n`,
+    h3: (_n, inner) => `### ${inner}\n`,
+    h4: (_n, inner) => `#### ${inner}\n`,
+    h5: (_n, inner) => `##### ${inner}\n`,
+    h6: (_n, inner) => `###### ${inner}\n`,
+    pre: (_n, inner) => `\n\`\`\`\n${inner}\n\`\`\`\n`,
+    p: (_n, inner) => `\n${inner}\n`,
+    div: (_n, inner) => `\n${inner}\n`,
+    ul: (node) => listToMd(node, false),
+    ol: (node) => listToMd(node, true),
+    li: (_n, inner) => inner,
+  };
   function htmlToMdFromNode(node) {
     if (!node) return '';
-    const t = node.nodeType;
-    if (t === Node.TEXT_NODE) return node.textContent || '';
-    if (t !== Node.ELEMENT_NODE) return '';
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const tag = node.tagName.toLowerCase();
     const inner = Array.from(node.childNodes).map(htmlToMdFromNode).join('');
-    if (tag === 'br') return '\n';
-    if (tag === 'strong' || tag === 'b') return `**${inner}**`;
-    if (tag === 'em' || tag === 'i') return `*${inner}*`;
-    if (tag === 'code' && node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') return inner;
-    if (tag === 'code') return `\`${inner}\``;
-    if (tag === 'a') {
-      const href = node.getAttribute('href') || '';
-      return `[${inner}](${href})`;
-    }
-    if (tag === 'img') {
-      const src = node.getAttribute('src') || '';
-      const alt = node.getAttribute('alt') || '';
-      return `![${alt}](${src})`;
-    }
-    if (tag === 'h1') return `# ${inner}\n`;
-    if (tag === 'h2') return `## ${inner}\n`;
-    if (tag === 'h3') return `### ${inner}\n`;
-    if (tag === 'h4') return `#### ${inner}\n`;
-    if (tag === 'h5') return `##### ${inner}\n`;
-    if (tag === 'h6') return `###### ${inner}\n`;
-    if (tag === 'pre') return `\n\`\`\`\n${inner}\n\`\`\`\n`;
-    if (tag === 'p' || tag === 'div') return `\n${inner}\n`;
-    if (tag === 'ul') return Array.from(node.children).map((li) => `- ${htmlToMdFromNode(li)}`).join('\n') + '\n';
-    if (tag === 'ol') return Array.from(node.children).map((li, i) => `${i + 1}. ${htmlToMdFromNode(li)}`).join('\n') + '\n';
-    if (tag === 'li') return inner;
+    const handler = mdTagHandlers[tag];
+    if (handler) return handler(node, inner);
     return inner;
   }
   function htmlToMd(rootEl) {
@@ -506,6 +513,83 @@
     shadow.getElementById('notePreview').innerHTML = mdToHtml(src);
   }
 
+  function setDomainHeader(hist) {
+    shadow.getElementById('domain').textContent = domainCache;
+    shadow.getElementById('last').textContent = hist?.lastVisit ? `最后访问：${fmt(hist.lastVisit)}` : '';
+  }
+  function extractNoteTitle(content) {
+    const h1Match = content.match(/^#\s+(.*)$/m);
+    if (!h1Match) return { title: '无标题', content };
+    return { title: h1Match[1].trim(), content: content.replace(h1Match[0], '').trim() };
+  }
+  function noteSummaryText(content) {
+    return content.replace(/!\[.*?\]\(.*?\)/g, '[图片]').replace(/[#*`>]/g, '').trim() || '（无内容）';
+  }
+  function createNoteHeader(title, updatedAt) {
+    const header = document.createElement('div');
+    header.className = 'item-header';
+    const headerLeft = document.createElement('div');
+    headerLeft.className = 'header-left';
+    if (title) {
+      const titleEl = document.createElement('div');
+      titleEl.className = 'note-title';
+      titleEl.textContent = title;
+      headerLeft.appendChild(titleEl);
+    }
+    const timeEl = document.createElement('div');
+    timeEl.className = 'note-time';
+    timeEl.textContent = fmt(updatedAt);
+    headerLeft.appendChild(timeEl);
+    const toggle = document.createElement('div');
+    toggle.className = 'item-toggle';
+    toggle.textContent = '▶';
+    header.appendChild(headerLeft);
+    header.appendChild(toggle);
+    return { header, headerLeft };
+  }
+  function createNoteDetail(content) {
+    const detail = document.createElement('div');
+    detail.className = 'item-detail';
+    detail.innerHTML = mdToHtml(content);
+    return detail;
+  }
+  function createNoteActions(noteId, onRefresh) {
+    const actions = document.createElement('div');
+    actions.className = 'item-actions';
+    const del = document.createElement('button');
+    del.className = 'btn';
+    del.textContent = '删除';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('确认删除此笔记？')) return;
+      await sendMessage({ type: 'DELETE_NOTE', payload: { noteId } });
+      onRefresh();
+    });
+    actions.appendChild(del);
+    return actions;
+  }
+  function createNoteItem(note, onRefresh) {
+    const item = document.createElement('div');
+    item.className = 'item';
+    const extracted = extractNoteTitle(note.content || '');
+    const summaryText = noteSummaryText(extracted.content);
+    const { header } = createNoteHeader(extracted.title, note.updatedAt);
+    const summary = document.createElement('div');
+    summary.className = 'item-summary';
+    summary.textContent = summaryText;
+    const detail = createNoteDetail(extracted.content);
+    detail.appendChild(createNoteActions(note.id, onRefresh));
+    const toggleFn = () => {
+      const isExpanded = item.classList.contains('expanded');
+      item.classList.toggle('expanded', !isExpanded);
+    };
+    header.addEventListener('click', toggleFn);
+    summary.addEventListener('click', toggleFn);
+    item.appendChild(header);
+    item.appendChild(summary);
+    item.appendChild(detail);
+    return item;
+  }
   async function refresh() {
     if (!domainCache) return;
     await checkStatus();
@@ -513,105 +597,12 @@
     const n = await sendMessage({ type: 'GET_NOTES', payload: { domain: domainCache } });
     const hist = h?.data || null;
     const notes = n?.data || [];
-    shadow.getElementById('domain').textContent = domainCache;
-    shadow.getElementById('last').textContent = hist?.lastVisit
-      ? `最后访问：${fmt(hist.lastVisit)}`
-      : '';
+    setDomainHeader(hist);
     const list = shadow.getElementById('noteList');
     list.innerHTML = '';
-    for (const note of notes) {
-      const item = document.createElement('div');
-      item.className = 'item';
-      
-      let rawContent = note.content || '';
-      let title = '';
-      
-      // Extract first H1 as title
-      const h1Match = rawContent.match(/^#\s+(.*)$/m);
-      if (h1Match) {
-        title = h1Match[1].trim();
-        // Remove the H1 line from content to avoid duplication
-        rawContent = rawContent.replace(h1Match[0], '').trim();
-      } else {
-        // Fallback title if needed, or just leave empty
-        // User instruction implies extracting, if no H1, maybe no title shown in header?
-        // Let's default to '无标题' if we want consistency, or just empty.
-        // But for layout stability, let's keep it empty if not found.
-        title = '无标题';
-      }
-
-      // Summary Text (Strip markdown, replace images)
-      const summaryText = rawContent.replace(/!\[.*?\]\(.*?\)/g, '[图片]').replace(/[#*`>]/g, '').trim() || '（无内容）';
-      
-      // Rendered Content
-      const renderedHtml = mdToHtml(rawContent);
-
-      // Header
-      const header = document.createElement('div');
-      header.className = 'item-header';
-      
-      const headerLeft = document.createElement('div');
-      headerLeft.className = 'header-left';
-
-      if (title) {
-        const titleEl = document.createElement('div');
-        titleEl.className = 'note-title';
-        titleEl.textContent = title;
-        headerLeft.appendChild(titleEl);
-      }
-
-      const timeEl = document.createElement('div');
-      timeEl.className = 'note-time';
-      timeEl.textContent = fmt(note.updatedAt);
-      headerLeft.appendChild(timeEl);
-      
-      const toggle = document.createElement('div');
-      toggle.className = 'item-toggle';
-      toggle.textContent = '▶'; // Simple arrow
-      
-      header.appendChild(headerLeft);
-      header.appendChild(toggle);
-      
-      // Summary Body
-      const summary = document.createElement('div');
-      summary.className = 'item-summary';
-      summary.textContent = summaryText;
-      
-      // Detail Body
-      const detail = document.createElement('div');
-      detail.className = 'item-detail';
-      detail.innerHTML = renderedHtml;
-      
-      // Actions (Delete)
-      const actions = document.createElement('div');
-      actions.className = 'item-actions';
-      const del = document.createElement('button');
-      del.className = 'btn';
-      del.textContent = '删除';
-      del.addEventListener('click', async (e) => {
-        e.stopPropagation(); // Prevent toggle
-        if (!confirm('确认删除此笔记？')) return;
-        await sendMessage({ type: 'DELETE_NOTE', payload: { noteId: note.id } });
-        refresh();
-      });
-      actions.appendChild(del);
-      detail.appendChild(actions); // Put actions inside detail to keep clean? Or separate?
-      // User wants "expandable", so maybe actions visible only when expanded? 
-      // Or always visible? Let's put in detail for cleaner collapsed view.
-
-      // Toggle Logic
-      const toggleFn = () => {
-        const isExpanded = item.classList.contains('expanded');
-        item.classList.toggle('expanded', !isExpanded);
-      };
-      header.addEventListener('click', toggleFn);
-      summary.addEventListener('click', toggleFn);
-
-      item.appendChild(header);
-      item.appendChild(summary);
-      item.appendChild(detail);
-      list.appendChild(item);
-    }
+    notes.forEach((note) => {
+      list.appendChild(createNoteItem(note, refresh));
+    });
   }
 
   float.addEventListener('click', () => {
@@ -650,7 +641,7 @@
     if (panel.classList.contains('visible')) positionPanel();
   });
 
-  window.addEventListener('pointerup', (e) => {
+  window.addEventListener('pointerup', () => {
     if (!dragActive) return;
     dragActive = false;
     float.classList.remove('dragging');
@@ -705,13 +696,6 @@
     row.style.display = visible ? 'none' : 'block';
     actions.style.display = visible ? 'none' : 'flex';
     shadow.getElementById('toggleNoteInputBtn').textContent = visible ? '新建笔记' : '收起笔记';
-    
-    // Reset preview state if needed, but in split view we always show both
-    previewOn = true;
-    // shadow.getElementById('togglePreviewBtn').textContent = '关闭预览'; 
-    // Maybe hide toggle preview button since it's always on?
-    // Or use it to toggle full width editor?
-    // User wants split column. Let's keep it simple.
     updatePreview();
   });
 
@@ -726,48 +710,54 @@
     updatePreview();
   });
   
-  shadow.getElementById('noteEditor').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-      const editorEl = shadow.getElementById('noteEditor');
-      const sel = editorEl.getRootNode().getSelection();
-      if (!sel.rangeCount) return;
-      const range = sel.getRangeAt(0);
-      const preCaretRange = range.cloneRange();
-      preCaretRange.selectNodeContents(editorEl);
-      preCaretRange.setEnd(range.endContainer, range.endOffset);
-      const textBefore = preCaretRange.toString();
-      const lastNewLine = textBefore.lastIndexOf('\n');
-      const lineStart = lastNewLine === -1 ? 0 : lastNewLine + 1;
-      const currentLinePrefix = textBefore.substring(lineStart);
-
-      const ulMatch = currentLinePrefix.match(/^(\s*)([-*+])(\s+)(.*)$/);
-      const olMatch = currentLinePrefix.match(/^(\s*)(\d+)(\.\s+)(.*)$/);
-      const taskMatch = currentLinePrefix.match(/^(\s*)(-\s*\[[ x]\])(\s+)(.*)$/);
-
-      let toInsert = null;
-      let isEmptyLine = false;
-
-      if (taskMatch) {
-        if (!taskMatch[4].trim()) isEmptyLine = true;
-        else toInsert = '\n' + taskMatch[1] + '- [ ] ';
-      } else if (olMatch) {
-        if (!olMatch[4].trim()) isEmptyLine = true;
-        else {
-          const num = parseInt(olMatch[2], 10);
-          toInsert = '\n' + olMatch[1] + (num + 1) + olMatch[3];
-        }
-      } else if (ulMatch) {
-        if (!ulMatch[4].trim()) isEmptyLine = true;
-        else toInsert = '\n' + ulMatch[1] + ulMatch[2] + ulMatch[3];
-      }
-
-      if (isEmptyLine) return;
-
-      if (toInsert) {
-        e.preventDefault();
-        document.execCommand('insertText', false, toInsert);
-      }
+  function isListEnterEvent(e) {
+    return e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey;
+  }
+  function getEditorSelection(editorEl) {
+    const root = editorEl.getRootNode ? editorEl.getRootNode() : editorEl.ownerDocument;
+    const sel = root.getSelection ? root.getSelection() : editorEl.ownerDocument.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    return sel;
+  }
+  function getCurrentLineText(editorEl) {
+    const sel = getEditorSelection(editorEl);
+    if (!sel) return '';
+    const range = sel.getRangeAt(0);
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(editorEl);
+    preCaretRange.setEnd(range.endContainer, range.endOffset);
+    const textBefore = preCaretRange.toString();
+    const lastNewLine = textBefore.lastIndexOf('\n');
+    return lastNewLine === -1 ? textBefore : textBefore.substring(lastNewLine + 1);
+  }
+  function getListContinuation(lineText) {
+    const taskMatch = lineText.match(/^(\s*)(-\s*\[[ x]\])(\s+)(.*)$/);
+    if (taskMatch) {
+      if (!taskMatch[4].trim()) return { isEmpty: true, toInsert: '' };
+      return { isEmpty: false, toInsert: `\n${taskMatch[1]}- [ ] ` };
     }
+    const olMatch = lineText.match(/^(\s*)(\d+)(\.\s+)(.*)$/);
+    if (olMatch) {
+      if (!olMatch[4].trim()) return { isEmpty: true, toInsert: '' };
+      const num = parseInt(olMatch[2], 10);
+      return { isEmpty: false, toInsert: `\n${olMatch[1]}${num + 1}${olMatch[3]}` };
+    }
+    const ulMatch = lineText.match(/^(\s*)([-*+])(\s+)(.*)$/);
+    if (ulMatch) {
+      if (!ulMatch[4].trim()) return { isEmpty: true, toInsert: '' };
+      return { isEmpty: false, toInsert: `\n${ulMatch[1]}${ulMatch[2]}${ulMatch[3]}` };
+    }
+    return null;
+  }
+  shadow.getElementById('noteEditor').addEventListener('keydown', (e) => {
+    if (!isListEnterEvent(e)) return;
+    const editorEl = shadow.getElementById('noteEditor');
+    const lineText = getCurrentLineText(editorEl);
+    if (!lineText) return;
+    const next = getListContinuation(lineText);
+    if (!next || next.isEmpty || !next.toInsert) return;
+    e.preventDefault();
+    document.execCommand('insertText', false, next.toInsert);
   });
 
   // Context menu trigger
@@ -793,29 +783,43 @@
     }
   }, true);
 
+  function isPasteShortcut(e) {
+    return (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V');
+  }
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result || '');
+      reader.readAsDataURL(file);
+    });
+  }
+  async function readImageFromClipboardApi() {
+    if (!navigator.clipboard || !navigator.clipboard.read) return '';
+    const items = await navigator.clipboard.read();
+    for (const it of items) {
+      const type = it.types.find((t) => t.startsWith('image/'));
+      if (!type) continue;
+      const blob = await it.getType(type);
+      if (!blob || blob.size === 0) continue;
+      return await readFileAsDataUrl(blob);
+    }
+    return '';
+  }
+  function insertImageToEditor(editorEl, dataUrl) {
+    if (!dataUrl) return;
+    insertAtCursorContentEditable(editorEl, `<img src="${dataUrl}" />`);
+    updatePreview();
+  }
   shadow.getElementById('noteEditor').addEventListener('keydown', async (e) => {
-    const isPaste = (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V');
-    if (!isPaste) return;
+    if (!isPasteShortcut(e)) return;
     try {
-      if (navigator.clipboard && navigator.clipboard.read) {
-        const items = await navigator.clipboard.read();
-        for (const it of items) {
-          const type = it.types.find((t) => t.startsWith('image/'));
-          if (!type) continue;
-          const blob = await it.getType(type);
-          if (blob && blob.size > 0) {
-            const reader = new FileReader();
-            reader.onload = () => {
-              insertAtCursorContentEditable(shadow.getElementById('noteEditor'), `<img src="${reader.result}" />`);
-              updatePreview();
-            };
-            reader.readAsDataURL(blob);
-            e.preventDefault();
-            return;
-          }
-        }
-      }
-    } catch (_) {}
+      const dataUrl = await readImageFromClipboardApi();
+      if (!dataUrl) return;
+      e.preventDefault();
+      insertImageToEditor(shadow.getElementById('noteEditor'), dataUrl);
+    } catch (err) {
+      void 0;
+    }
   }, true);
 
   function insertAtCursorContentEditable(el, html) {
@@ -855,80 +859,63 @@
     return sel;
   }
 
+  async function pasteImageFromClipboardItem(cd, editorEl, e) {
+    const items = cd && cd.items ? Array.from(cd.items) : [];
+    const imgItem = items.find((it) => it.type && it.type.startsWith('image/'));
+    if (!imgItem || typeof imgItem.getAsFile !== 'function') return false;
+    const file = imgItem.getAsFile();
+    if (!file) return false;
+    e.preventDefault();
+    const dataUrl = await readFileAsDataUrl(file);
+    insertImageToEditor(editorEl, dataUrl);
+    return true;
+  }
+  async function pasteImageFromClipboardFiles(cd, editorEl, e) {
+    const files = cd && cd.files ? Array.from(cd.files) : [];
+    const fileImg = files.find((f) => f.type && f.type.startsWith('image/'));
+    if (!fileImg) return false;
+    e.preventDefault();
+    const dataUrl = await readFileAsDataUrl(fileImg);
+    insertImageToEditor(editorEl, dataUrl);
+    return true;
+  }
+  async function pasteImageFromClipboardApi(editorEl, e) {
+    try {
+      const dataUrl = await readImageFromClipboardApi();
+      if (!dataUrl) return false;
+      e.preventDefault();
+      insertImageToEditor(editorEl, dataUrl);
+      return true;
+    } catch (err) {
+      void 0;
+    }
+    return false;
+  }
+  async function pasteImageFromHtml(cd, editorEl, e) {
+    const html = cd && typeof cd.getData === 'function' ? cd.getData('text/html') : '';
+    if (!html) return false;
+    const m = html.match(/<img[^>]*src=["']([^"'>]+)["'][^>]*>/i);
+    if (!m || !m[1]) return false;
+    e.preventDefault();
+    const src = m[1];
+    if (src.startsWith('data:')) {
+      insertImageToEditor(editorEl, src);
+      return true;
+    }
+    const r = await sendMessage({ type: 'FETCH_IMAGE_TO_DATA_URL', payload: { url: src } });
+    const dataUrl = r?.data?.dataUrl || '';
+    insertImageToEditor(editorEl, dataUrl);
+    return true;
+  }
   async function onPasteInEditor(e) {
     e.stopPropagation();
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
     const editorEl = shadow.getElementById('noteEditor');
     const cd = e.clipboardData;
-    const items = cd && cd.items ? Array.from(cd.items) : [];
-    const imgItem = items.find((it) => it.type && it.type.startsWith('image/'));
-    if (imgItem && typeof imgItem.getAsFile === 'function') {
-      const file = imgItem.getAsFile();
-      if (file) {
-        e.preventDefault();
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result;
-          insertAtCursorContentEditable(editorEl, `<img src="${dataUrl}" />`);
-          updatePreview();
-        };
-        reader.readAsDataURL(file);
-        return;
-      }
-    }
-    const files = cd && cd.files ? Array.from(cd.files) : [];
-    const fileImg = files.find((f) => f.type && f.type.startsWith('image/'));
-    if (fileImg) {
-      e.preventDefault();
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result;
-        insertAtCursorContentEditable(editorEl, `<img src="${dataUrl}" />`);
-        updatePreview();
-      };
-      reader.readAsDataURL(fileImg);
-      return;
-    }
-    try {
-      if (navigator.clipboard && navigator.clipboard.read) {
-        const clipItems = await navigator.clipboard.read();
-        for (const ci of clipItems) {
-          const type = ci.types.find((t) => t.startsWith('image/'));
-          if (type) {
-            const blob = await ci.getType(type);
-            const reader = new FileReader();
-            reader.onload = () => {
-              const dataUrl = reader.result;
-              insertAtCursorContentEditable(editorEl, `<img src="${dataUrl}" />`);
-              updatePreview();
-            };
-            reader.readAsDataURL(blob);
-            e.preventDefault();
-            return;
-          }
-        }
-      }
-    } catch (_) {}
-    const html = cd && typeof cd.getData === 'function' ? cd.getData('text/html') : '';
-    if (html) {
-      const m = html.match(/<img[^>]*src=["']([^"'>]+)["'][^>]*>/i);
-      if (m && m[1]) {
-        e.preventDefault();
-        const src = m[1];
-        if (src.startsWith('data:')) {
-          insertAtCursorContentEditable(editorEl, `<img src="${src}" />`);
-          updatePreview();
-          return;
-        }
-        const r = await sendMessage({ type: 'FETCH_IMAGE_TO_DATA_URL', payload: { url: src } });
-        const dataUrl = r?.data?.dataUrl || '';
-        if (dataUrl) {
-          insertAtCursorContentEditable(editorEl, `<img src="${dataUrl}" />`);
-          updatePreview();
-          return;
-        }
-      }
-    }
+    if (await pasteImageFromClipboardItem(cd, editorEl, e)) return;
+    if (await pasteImageFromClipboardFiles(cd, editorEl, e)) return;
+    if (await pasteImageFromClipboardApi(editorEl, e)) return;
+    await pasteImageFromHtml(cd, editorEl, e);
   }
   shadow.getElementById('noteEditor').addEventListener('paste', onPasteInEditor, true);
 
@@ -984,7 +971,6 @@
     shadow.getElementById('noteRow').style.display = 'none';
     shadow.getElementById('noteActions').style.display = 'none';
     shadow.getElementById('toggleNoteInputBtn').textContent = '新建笔记';
-    previewOn = false;
     shadow.getElementById('notePreview').style.display = 'none';
     refresh();
   });
@@ -1046,25 +1032,38 @@
   });
 
   // 监听后台推送的访问状态，收到后即时更新浮球颜色与文案
+  function applyVisitedStatus(payload) {
+    if (!payload || payload.domain !== domainCache) return;
+    isTested = !!payload.isVisited;
+    const statusEl = shadow.getElementById('status');
+    statusEl.textContent = isTested ? '测试状态：已测试' : '测试状态：未测试';
+    statusEl.classList.toggle('tested', isTested);
+    statusEl.classList.toggle('untested', !isTested);
+    const tBtn = shadow.getElementById('toggleTestBtn');
+    tBtn.textContent = isTested ? '取消已测试标记' : '标记为已测试';
+    shadow.getElementById('last').textContent = payload.lastVisit ? `最后访问：${fmt(payload.lastVisit)}` : '';
+    float.classList.toggle('tested', isTested);
+    float.classList.toggle('untested', !isTested);
+    float.textContent = isTested ? '已测' : '未测';
+  }
+  function applyFloatHiddenMessage(payload) {
+    if (typeof payload?.hidden !== 'boolean') return;
+    setFloatHidden(payload.hidden);
+    saveFloatState();
+  }
+  function handleRuntimeMessage(message) {
+    const { type, payload } = message || {};
+    if (type === 'SET_FLOAT_HIDDEN') {
+      applyFloatHiddenMessage(payload);
+      return;
+    }
+    if (type !== 'VISITED_STATUS') return;
+    applyVisitedStatus(payload);
+  }
   try {
     chrome.runtime.onMessage.addListener((message) => {
       try {
-        const { type, payload } = message || {};
-        if (type !== 'VISITED_STATUS') return;
-        if (!payload || payload.domain !== domainCache) return;
-        isTested = !!payload.isVisited;
-        const statusEl = shadow.getElementById('status');
-        statusEl.textContent = isTested ? '测试状态：已测试' : '测试状态：未测试';
-        statusEl.classList.toggle('tested', isTested);
-        statusEl.classList.toggle('untested', !isTested);
-        const tBtn = shadow.getElementById('toggleTestBtn');
-        tBtn.textContent = isTested ? '取消已测试标记' : '标记为已测试';
-        shadow.getElementById('last').textContent = payload.lastVisit
-          ? `最后访问：${fmt(payload.lastVisit)}`
-          : '';
-        float.classList.toggle('tested', isTested);
-        float.classList.toggle('untested', !isTested);
-        float.textContent = isTested ? '已测' : '未测';
+        handleRuntimeMessage(message);
       } catch (err) {
         void 0;
       }
@@ -1078,7 +1077,9 @@
     try {
       const { theme } = await chrome.storage.local.get('theme');
       applyTheme(theme || 'light');
-    } catch(e) {}
+    } catch (e) {
+      void 0;
+    }
   }
 
   function applyTheme(theme) {
@@ -1092,6 +1093,10 @@
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.theme) {
       applyTheme(changes.theme.newValue);
+    }
+    if (changes[FLOAT_STATE_KEY]) {
+      const hidden = changes[FLOAT_STATE_KEY].newValue?.hidden;
+      if (typeof hidden === 'boolean') setFloatHidden(hidden);
     }
   });
   
