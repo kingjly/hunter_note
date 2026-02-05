@@ -220,6 +220,15 @@
     return Math.min(max, Math.max(min, v));
   }
 
+  function getDefaultFloatPosition() {
+    const margin = 8;
+    const w = float.offsetWidth || 48;
+    const h = float.offsetHeight || 48;
+    const left = window.innerWidth - w - margin;
+    const top = window.innerHeight - h - margin;
+    return { left, top };
+  }
+
   function setFloatHidden(hidden) {
     floatHidden = hidden;
     host.style.display = hidden ? 'none' : 'block';
@@ -266,7 +275,27 @@
         const left = clamp(state.x, margin, window.innerWidth - w - margin);
         const top = clamp(state.y, margin, window.innerHeight - h - margin);
         setFloatPosition(left, top);
+      } else if (!state.hidden) {
+        const { left, top } = getDefaultFloatPosition();
+        setFloatPosition(left, top);
       }
+    } catch (e) {
+      void 0;
+    }
+  }
+
+  async function persistFloatHidden(hidden) {
+    try {
+      const res = await chrome.storage.local.get(FLOAT_STATE_KEY);
+      const state = res[FLOAT_STATE_KEY] || {};
+      const next = { ...state, hidden };
+      if (!hidden && (typeof next.x !== 'number' || typeof next.y !== 'number')) {
+        const { left, top } = getDefaultFloatPosition();
+        setFloatPosition(left, top);
+        next.x = left;
+        next.y = top;
+      }
+      await chrome.storage.local.set({ [FLOAT_STATE_KEY]: next });
     } catch (e) {
       void 0;
     }
@@ -614,7 +643,7 @@
   float.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     setFloatHidden(true);
-    saveFloatState();
+    void persistFloatHidden(true);
   });
 
   float.addEventListener('pointerdown', (e) => {
@@ -658,7 +687,7 @@
     const key = (e.key || '').toLowerCase();
     if (e.ctrlKey && e.shiftKey && key === 'h') {
       setFloatHidden(!floatHidden);
-      saveFloatState();
+      void persistFloatHidden(floatHidden);
     }
   });
 
@@ -1049,7 +1078,7 @@
   function applyFloatHiddenMessage(payload) {
     if (typeof payload?.hidden !== 'boolean') return;
     setFloatHidden(payload.hidden);
-    saveFloatState();
+    void persistFloatHidden(payload.hidden);
   }
   function handleRuntimeMessage(message) {
     const { type, payload } = message || {};
